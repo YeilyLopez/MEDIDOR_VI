@@ -1,0 +1,179 @@
+#include <LiquidCrystal.h>
+
+#define NUM_SAMPLES 200
+#define VREF 4.6
+#define ADC_TO_VOLT (VREF / 1023.0)
+
+#define OFFSET_DC 2.01
+#define TOTAL_GAIN 193.2
+#define SHUNT_RES 2.6
+
+#define BTN_VOLT 2
+#define BTN_CURR 3
+#define BTN_POT  4
+
+const int pinV = A3;
+const int pinI = A4;
+
+LiquidCrystal lcd(13, 11, 6, 7, 8, 9);
+
+float vSamples[NUM_SAMPLES];
+float iSamples[NUM_SAMPLES];
+
+int screen = 0;
+
+void computeAll(float &Vrms, float &Irms,
+                float &Vpico, float &Ipico,
+                float &S, float &P,
+                float &Q, float &FP)
+{
+  int index = 0;
+
+  float vPrev = 0;
+  float vNow = 0;
+
+  // --------- ESPERAR CRUCE POR CERO ASCENDENTE ----------
+  do {
+    vPrev = vNow;
+    vNow = analogRead(pinV) * ADC_TO_VOLT - OFFSET_DC;
+  } while (!(vPrev < 0 && vNow >= 0));
+
+  // --------- CAPTURAR UN CICLO COMPLETO ----------
+  do {
+    float vRaw = analogRead(pinV) * ADC_TO_VOLT;
+    float iRaw = analogRead(pinI) * ADC_TO_VOLT;
+
+    float v = (vRaw - OFFSET_DC) * TOTAL_GAIN;
+    float i = (iRaw - OFFSET_DC) / SHUNT_RES;
+
+    if (index < NUM_SAMPLES) {
+      vSamples[index] = v;
+      iSamples[index] = i;
+      index++;
+    }
+
+    vPrev = vNow;
+    vNow = vRaw - OFFSET_DC;
+
+  } while (!(vPrev < 0 && vNow >= 0) && index < NUM_SAMPLES);
+
+  // --------- CÁLCULOS ----------
+  float sumSqV = 0;
+  float sumSqI = 0;
+  float sumP   = 0;
+
+  for (int n = 0; n < index; n++) {
+    sumSqV += vSamples[n] * vSamples[n];
+    sumSqI += iSamples[n] * iSamples[n];
+    sumP   += vSamples[n] * iSamples[n];
+  }
+
+  Vrms = sqrt(sumSqV / index);
+  Irms = sqrt(sumSqI / index);
+
+  Vpico = Vrms * 1.4142;
+  Ipico = Irms * 1.4142;
+
+  P = sumP / index;      // Potencia real promedio
+  S = Vrms * Irms;
+
+  if (S > 0.01)
+    FP = P / S;
+  else
+    FP = 0;
+
+  float temp = (S * S) - (P * P);
+  if (temp > 0)
+    Q = sqrt(temp);
+  else
+    Q = 0;
+}
+
+void setup()
+{
+  Serial.begin(115200);
+  lcd.begin(16, 2);
+
+  pinMode(BTN_VOLT, INPUT_PULLUP);
+  pinMode(BTN_CURR, INPUT_PULLUP);
+  pinMode(BTN_POT,  INPUT_PULLUP);
+
+  lcd.clear();
+}
+
+void loop()
+{
+  if (digitalRead(BTN_VOLT) == LOW) {
+    screen = 1;
+    lcd.clear();
+    delay(250);
+  }
+
+  if (digitalRead(BTN_CURR) == LOW) {
+    screen = 2;
+    lcd.clear();
+    delay(250);
+  }
+
+  if (digitalRead(BTN_POT) == LOW) {
+    screen = 3;
+    lcd.clear();
+    delay(250);
+  }
+
+  float Vrms, Irms, Vpico, Ipico, S, P, Q, FP;
+  computeAll(Vrms, Irms, Vpico, Ipico, S, P, Q, FP);
+
+  // --------- PANTALLAS ----------
+  if (screen == 0) {
+
+    lcd.setCursor(0,0);
+    lcd.print("1:Volt 2:Corr");
+
+    lcd.setCursor(0,1);
+    lcd.print("3:Potencia");
+  }
+
+  else if (screen == 1) {
+
+    lcd.setCursor(0,0);
+    lcd.print("Vrms: ");
+    lcd.print(Vrms,1);
+    lcd.print(" V   ");
+
+    lcd.setCursor(0,1);
+    lcd.print("Vpico:");
+    lcd.print(Vpico,1);
+    lcd.print(" V   ");
+  }
+
+  else if (screen == 2) {
+
+    lcd.setCursor(0,0);
+    lcd.print("Irms: ");
+    lcd.print(Irms,3);
+    lcd.print(" A   ");
+
+    lcd.setCursor(0,1);
+    lcd.print("Ipico:");
+    lcd.print(Ipico,3);
+    lcd.print(" A   ");
+  }
+
+  else if (screen == 3) {
+
+    lcd.setCursor(0,0);
+    lcd.print("P:");
+    lcd.print(P,1);
+    lcd.print("W S:");
+    lcd.print(S,1);
+
+    lcd.setCursor(0,1);
+    lcd.print("Q:");
+    lcd.print(Q,1);
+    lcd.print(" FP:");
+    lcd.print(FP,2);
+  }
+
+  delay(150);
+}
